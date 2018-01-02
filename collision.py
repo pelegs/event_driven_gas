@@ -58,24 +58,25 @@ class ball:
                  vel   = np.zeros(nD),
                  rad   = 1.0,
                  mass  = 1.0,
-                 color = colors['black']):
-    
-        self.pos   = pos.flatten()
-        self.vel   = vel.flatten()
-        self.rad   = rad
-        self.mass  = mass 
-        self.color = color
+                 color = colors['black'],
+                 ID    = -1):
+
+        self.pos    = pos.flatten()
+        self.vel    = vel.flatten()
+        self.rad    = rad
+        self.mass   = mass 
+        self.color  = color
+        self.events = []
+        self.ID     = ID
 
     def draw(self, surface):
-        pos_int = [int(x) for x in self.pos]
-        pygame.draw.circle(surface, self.color, pos_int, self.rad)
-        #pygame.draw.line(surface, colors['black'], pos_int, pos_int + self.vel, 3)
+        pygame.draw.circle(surface, self.color, self.pos.astype(int), self.rad)
 
     def move(self, dt):
-        self.pos += self.vel * dt
+        self.pos = self.pos + self.vel * dt
 
     def bounce(self, wall):
-        return 1
+        self.vel = self.vel - 2 * np.dot(self.vel, wall.normal) * wall.normal 
 
 class wall:
     def __init__(self,
@@ -83,7 +84,8 @@ class wall:
                  start     = np.zeros(nD),
                  length    = 1,
                  width     = 5,
-                 color     = colors['black']):
+                 color     = colors['black'],
+                 ID        = -1):
 
         self.direction = direction
         self.normal    = calc_normal(direction)
@@ -92,9 +94,10 @@ class wall:
         self.end       = start + length * direction
         self.width     = width
         self.color     = color
+        self.ID        = ID
 
     def draw(self, surface): 
-        pygame.draw.line(surface, self.color, self.start, self.end, self.width)         
+        pygame.draw.line(surface, self.color, self.start, self.end, self.width)          
 
 def put_balls(balls, N, r, min_pos = 0, max_pos = 800, min_v = 0, max_v = 100, color = colors['black']):
     # Enforce no overlaps
@@ -107,10 +110,13 @@ def put_balls(balls, N, r, min_pos = 0, max_pos = 800, min_v = 0, max_v = 100, c
                 overlap = True
                 break
         if overlap is False:
+            if color == 'random':
+                color = np.random.randint(100, 255, size=(1,3)).flatten()
             balls.append(ball(pos = c,
                               vel = np.random.uniform(min_v, max_v, size=(1,nD)),
                               rad = r,
-                              color = color))
+                              color = color,
+                              ID    = i))
             i += 1
 
     # Enforce static center of mass for system
@@ -127,7 +133,7 @@ def ball_collision(b1, b2):
     b1.vel = b1.vel + J/b1.mass
     b2.vel = b2.vel - J/b2.mass
 
-def time_ball_collision(b1, b2):
+def time_ball_collision(b1, b2, time):
     dr  = b2.pos - b1.pos
     dv  = b2.vel - b1.vel
     dr2 = np.dot(dr, dr)
@@ -138,9 +144,9 @@ def time_ball_collision(b1, b2):
     if dvr >= 0 or d < 0:
         return float('inf')
     else:
-        return -1 * (dvr + np.sqrt(d)) / dv2
+        return -1 * (dvr + np.sqrt(d)) / dv2 + time
 
-def time_wall_collision(b, w):
+def time_wall_collision(b, w, time):
     l1_start = b.pos
     l1_end   = b.pos + 1E10 * normalize(b.vel)
     if intersect(l1_start, l1_end, w.start, w.end):
@@ -148,102 +154,139 @@ def time_wall_collision(b, w):
         d = distance(b.pos, p) - b.rad
         v = np.linalg.norm(b.vel)
         if v != 0:
-            return d / v
+            return d / v + time
         else:
             return float('inf')
     else:
         return float('inf')
 
-'''def calc_ball_collision_time(balls):
-    for b1 in
-'''
+class event:
+    def __init__(self, ball1, ball2=None, wall=None, time=0):
+        self.ball1  = ball1
+        self.ball2  = ball2
+        self.wall   = wall
+        self.active = True
+        if ball2 is None:
+            if wall is None:
+                print('Error: No second ball nor wall provided.')
+                return None
+            else:
+                self.time = time_wall_collision(ball1, wall, time)
+        else:
+            if wall is not None:
+                print('Error: Second ball and wall provided.')
+                return None
+            else:
+                self.time = time_ball_collision(ball1, ball2, time)
+        
+    def __lt__(self, other):
+        return self.time < other.time
+
+def create_events(i, ball1, balls, walls, queue, current_time):
+    for e in ball1.events:
+        e.active = False
+    ball1.events = []
+    for j, ball2 in enumerate(balls):
+        if i < j < len(balls):
+            e = event(ball1, ball2, wall=None, time=current_time)
+            queue.put(e)
+            ball1.events.append(e)
+    
+    for wall in walls:
+        e = event(ball1, None, wall, current_time)
+        queue.put(e)
+        ball1.events.append(e)
+
 scr_size = 800
-dt = 0.005
-N_balls = 200
+dt = 0.05
+N_balls = 10
 balls = []
-'''put_balls(balls,
+put_balls(balls,
           N       = N_balls,
           r       = 10,
-          min_pos = 115,
-          max_pos = 684,
+          min_pos = 150,
+          max_pos = 600,
           min_v   = -40,
           max_v   = 40,
-          color   = colors['red'])
-'''
-ball1 = ball(pos   = np.array([330.0, 300.0]),
-             vel   = np.array([3, 5]),
-             rad   = 30,
-             mass  = 1,
-             color = colors['blue'])
+          color   = 'random')
 
-ball2 = ball(pos   = np.array([500.0, 500.0]),
-             vel   = np.array([-3, -5]),
-             rad   = 30,
-             mass  = 1,
-             color = colors['red'])
+wall0 = wall(start  = np.array([100, 100]),
+             length = 600,
+             width  = 5,
+             color  = colors['blue'],
+             ID     = 0)
 
-balls = [ball1, ball2]
-
-wall1 = wall(direction = np.array([1, 2]),
-             start     = np.array([100, 200]),
-             length    = 200.0)
-
-'''
 wall1 = wall(start  = np.array([100, 100]),
-             length = 600,
-             width  = 5,
-             color  = colors['blue'])
-
-wall2 = wall(start  = np.array([100, 100]),
              direction = directions['vert'],
              length = 600,
              width  = 5,
-             color  = colors['blue'])
+             color  = colors['blue'],
+             ID     = 1)
 
-wall3 = wall(start  = np.array([100, 700]),
+wall2 = wall(start  = np.array([100, 700]),
              length = 600,
              width  = 5,
-             color  = colors['blue'])
+             color  = colors['blue'],
+             ID     = 2)
 
-wall4 = wall(start  = np.array([700, 100]),
+wall3 = wall(start  = np.array([700, 100]),
              direction = directions['vert'],
              length = 600,
              width  = 5,
-             color  = colors['blue'])
+             color  = colors['blue'],
+             ID     = 3)
 
-walls = [wall1, wall2, wall3, wall4]
-'''
+walls = [wall0, wall1, wall2, wall3]
+
+current_time = 0
+delta_time = 0
+event_queue = PriorityQueue()
+for i, ball1 in enumerate(balls):
+    create_events(i, ball1, balls, walls, event_queue, current_time)
+
 pygame.init()
 screen = pygame.display.set_mode ((scr_size, scr_size))
-time = 0
-t_b1_b2 = 0
-t_b_w = [0, 0]
 while True:
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
+    for ev in pygame.event.get():
+        if ev.type == pygame.QUIT:
             pygame.quit()
             sys.exit()
-        if event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_q:
+        if ev.type == pygame.KEYDOWN:
+            if ev.key == pygame.K_q:
                 pygame.quit()
                 sys.exit()
     
+    if not event_queue.empty():
+        next_event = event_queue.get()
+        if next_event.time > current_time and next_event.active:
+            print(current_time, next_event.time)
+            delta_time = next_event.time - current_time
+            current_time = next_event.time
+            ball1 = next_event.ball1
+            ball2 = next_event.ball2
+            wall  = next_event.wall
+            
+            #a, b = -1, -1
+            #if ball2 is not None:
+            #    a = ball2.ID
+            #if wall is not None:
+            #    b = wall.ID
+            #print(ball1.ID, a, b, delta_time, current_time)
+            
+            if ball2 is not None:
+                ball_collision(ball1, ball2)
+                create_events(ball2.ID, ball2, balls, walls, event_queue, current_time)
+            if wall is not None:
+                ball1.bounce(wall)
+            create_events(ball1.ID, ball1, balls, walls, event_queue, current_time)
+        else:
+            print('passed.')
+
     screen.fill(colors['white'])
-    for i, ball in enumerate(balls):
-        ball.move(dt)
-        if distance(ball1.pos, ball2.pos) <= ball1.rad + ball2.rad:
-            ball_collision(ball1, ball2)
+    for ball in balls:
+        ball.move(delta_time)
         ball.draw(screen)
-        t_b_w[i] = time_wall_collision(ball, wall1)
-        if t_b_w[i] <= dt:
-            ball.bounce(wall1)
-    t_b1_b2 = time_ball_collision(balls[0], balls[1])
-    wall1.draw(screen)
-    '''for wall in walls:
+    for wall in walls:
         wall.draw(screen)
-    '''
     pygame.display.update()
-    #pygame.time.delay(100)
-    
-    print('\r{} {} {}                  '.format(t_b1_b2, t_b_w[0], t_b_w[1]), end='')
-    time += dt
+    pygame.time.delay(500)
