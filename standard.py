@@ -1,6 +1,7 @@
 import numpy as np
 import pygame
 import sys
+from itertools import chain
 
 # colors
 colors = {
@@ -29,6 +30,7 @@ def normalize(v):
 def distance(v1, v2):
     return(np.linalg.norm(v2-v1))
 
+# Return noral vector to a given vector v
 def calc_normal(v):
     return normalize(np.array([-v[1], v[0]]))
 
@@ -51,14 +53,23 @@ def intersection_point(l1_start, l1_end, l2_start, l2_end):
     t = ((y3-y4) * (x1-x3) + (x4-x3) * (y1-y3)) / ((x4-x3) * (y1-y2) - (x1-x2) * (y4-y3))
     return l1_start + t * (l1_end - l1_start)
 
+def list_neighbor_indices(x, y, N):
+    return [(i,j)
+            for i in range(x-1, x+2)
+            for j in range(y-1, y+2)
+            if 0 <= i < N and 0 <= j < N]
+
 class ball:
+    cell = np.zeros(2)
+
     def __init__(self,
                  pos   = np.zeros(nD),
                  vel   = np.zeros(nD),
                  rad   = 1.0,
                  mass  = 1.0,
                  color = colors['black'],
-                 ID    = -1):
+                 ID    = -1,
+                 grid  = None):
 
         self.pos    = pos.flatten()
         self.vel    = vel.flatten()
@@ -67,18 +78,28 @@ class ball:
         self.color  = color
         self.events = []
         self.ID     = ID
+        if grid is not None:
+            self.cell = np.array([int(np.floor(x*grid.N)) for x in self.pos])
+        self.neighbors = []
+
+    def update_neighbors(self, grid):
+        cells = list(chain(*[grid.cells[i][j]
+                     for (i, j) in list_neighbor_indices(self.cell[0], self.cell[1], grid.N)]))
+        self.neighbors = [b for b in cells if b is not self]
 
     def draw(self, surface):
         pygame.draw.circle(surface, self.color, self.pos.astype(int), self.rad)
 
-    def move(self, dt, min_pos=0, max_pos=100):
+    def move(self, dt):
         #self.vel = self.vel + np.array([0, 100]) * dt
         self.pos = self.pos + self.vel * dt
-        if self.pos[0] < min_pos or self.pos[0] > max_pos or self.pos[1] < min_pos or self.pos[1] > max_pos:
-            self.pos = np.random.uniform(min_pos, max_pos, size=(1, nD))
+        self.cell = np.array([int(np.floor(x*grid.N))+1 for x in self.pos])
 
     def bounce(self, wall):
         self.vel = self.vel - 2 * np.dot(self.vel, wall.normal) * wall.normal 
+
+    def Ek(self):
+        return 0.5 * self.mass * np.dot(self.vel, self.vel)
 
 class wall:
     def __init__(self,
@@ -101,6 +122,23 @@ class wall:
     def draw(self, surface): 
         pygame.draw.line(surface, self.color, self.start, self.end, self.width)          
 
+class sim_grid:
+    def __init__(self, N):
+        self.cells = [[[] for _ in range(N)]
+                          for _ in range(N)]
+        self.N = N
+
+    def insert(self, b, L):
+        cell = np.array([int(np.floor(x/L*self.N)) for x in b.pos])
+        b.cell = cell
+        if (0 <= cell[0] < self.N) and (0 <= cell[1] < self.N):
+            self.cells[cell[0]][cell[1]].append(b)
+
+    def reset(self):
+        self.cells = [[[] for _ in range(self.N)]
+                          for _ in range(self.N)]
+        
+
 def put_balls(balls, N, r, min_pos = 0, max_pos = 800, v_sigma = 100, color = colors['black']):
     # Enforce no overlaps
     i = 0
@@ -112,9 +150,18 @@ def put_balls(balls, N, r, min_pos = 0, max_pos = 800, v_sigma = 100, color = co
                 overlap = True
                 break
         if overlap is False:
-            balls.append(ball(pos = c,
-                              vel = np.random.normal(0, v_sigma, size=(1,nD)),
-                              rad = r,
+            if c.flatten()[0] < dL+L/2:
+                m = 5 
+                r = 10
+                color = [255, 0, 0]
+            else:
+                m = 1
+                r = 6
+                color = [0, 255, 0]
+            balls.append(ball(pos   = c,
+                              vel   = np.random.normal(0, v_sigma, size=(1,nD)),
+                              rad   = r,
+                              mass  = m,
                               color = color,
                               ID    = i))
             i += 1
@@ -127,13 +174,21 @@ def put_balls(balls, N, r, min_pos = 0, max_pos = 800, v_sigma = 100, color = co
 
 def ball_collision(b1, b2):
     dr = b2.pos - b1.pos
+    dist = np.linalg.norm(dr)
+    overlap = b1.rad + b2.rad - dist
+    if overlap > 0:
+        b2.pos += normalize(dr) * overlap
     dv = b2.vel - b1.vel
-    J_size = 2 * b1.mass * b2.mass * np.dot(dv, dr) / ((b1.rad + b2.rad) * (b1.mass + b2.mass))
-    J = J_size * dr / (b1.rad + b2.rad)
-    b1.vel = b1.vel + J/b1.mass
-    b2.vel = b2.vel - J/b2.mass
+    #print('Before:', b1.Ek(), b2.Ek(), b1.Ek()+b2.Ek(), end='')
+    b1.vel = b1.vel - 2*b2.mass / (b1.mass + b2.mass) * np.dot(-dv, -dr)/np.dot(-dr, -dr) * -dr
+    b2.vel = b2.vel - 2*b1.mass / (b1.mass + b2.mass) * np.dot(+dv, +dr)/np.dot(+dr, +dr) * +dr
+    #print(', after:', b1.Ek(), b2.Ek(), b1.Ek()+b2.Ek())
+    if b2 in b1.neighbors:
+        b1.neighbors.remove(b2)
+    if b1 in b2.neighbors:
+        b2.neighbors.remove(b1)
 
-def time_ball_collision(b1, b2, time):
+def time_ball_collision(b1, b2):
     dr  = b2.pos - b1.pos
     dv  = b2.vel - b1.vel
     dr2 = np.dot(dr, dr)
@@ -144,7 +199,7 @@ def time_ball_collision(b1, b2, time):
     if dvr >= 0 or d < 0:
         return float('inf')
     else:
-        return -1 * (dvr + np.sqrt(d)) / dv2 + time
+        return -1 * (dvr + np.sqrt(d)) / dv2
 
 def time_wall_collision(b, w):
     l1_start = b.pos
@@ -161,46 +216,59 @@ def time_wall_collision(b, w):
         return float('inf')
 
 scr_size = 800
+
 dt = 0.01
-N_balls = 10
+
+L = 600
+dL = 100
+num_grid_cells = 35
+grid = sim_grid(num_grid_cells)
+
+N_balls = 100
 balls = []
 put_balls(balls,
           N       = N_balls,
-          r       = 10,
-          min_pos = 150,
-          max_pos = 600,
-          v_sigma = 100,
-          color   = colors['blue'])
+          r       = 5,
+          min_pos = dL+25,
+          max_pos = L+dL,
+          v_sigma = 250,
+          color   = colors['red'])
 
-wall0 = wall(start  = np.array([100, 100]),
-             length = 600,
+wall0 = wall(start  = np.array([dL, dL]),
+             length = L,
              width  = 5,
              color  = colors['blue'],
              ID     = 0)
 
-wall1 = wall(start  = np.array([100, 100]),
+wall1 = wall(start  = np.array([dL, dL]),
              direction = directions['vert'],
-             length = 600,
+             length = L,
              width  = 5,
              color  = colors['blue'],
              ID     = 1)
 
-wall2 = wall(start  = np.array([100, 700]),
-             length = 600,
+wall2 = wall(start  = np.array([dL, L+dL]),
+             length = L,
              width  = 5,
              color  = colors['blue'],
              ID     = 2)
 
-wall3 = wall(start  = np.array([700, 100]),
+wall3 = wall(start  = np.array([L+dL, dL]),
              direction = directions['vert'],
-             length = 600,
+             length = L,
              width  = 5,
              color  = colors['blue'],
              ID     = 3)
 
-walls = [wall0, wall1, wall2, wall3]
+wall4 = wall(start     = np.array([dL+L/2, dL]),
+             direction = np.array([0, 1]),
+             length    = L,
+             width     = 5,
+             color     = colors['black'],
+             ID        = 4)
+             
+walls = [wall0, wall1, wall2, wall3, wall4]
 
-E_tot = .0
 pygame.init()
 screen = pygame.display.set_mode ((scr_size, scr_size))
 while True:
@@ -212,22 +280,29 @@ while True:
             if event.key == pygame.K_q:
                 pygame.quit()
                 sys.exit()
+            if event.key == pygame.K_a:
+                walls.remove(wall4)
     
-    E_tot = .0
     screen.fill(colors['white'])
+    # Insert balls into grid
+    grid.reset()
+    for ball in balls:
+        grid.insert(ball, L) 
+    
     for i, ball1 in enumerate(balls):
-        for j, ball2 in enumerate(balls):
-            if i < j < len(balls):
-                if distance(ball1.pos, ball2.pos) <= ball1.rad + ball2.rad:
-                    ball_collision(ball1, ball2)                    
+        ball1.update_neighbors(grid)
+        for ball2 in ball1.neighbors:
+            if time_ball_collision(ball1, ball2) < dt:
+                ball_collision(ball1, ball2)
         for wall in walls:
             if time_wall_collision(ball1, wall) < dt:
                 ball1.bounce(wall)
-        ball1.move(dt, 100, 700)
+        ball1.move(dt)
         ball1.draw(screen)
-        E_tot = E_tot + 0.5 * ball1.mass * np.dot(ball1.vel, ball1.vel)
     for wall in walls:
         wall.draw(screen)
     pygame.display.update()
-    print('\r', E_tot, end='')
     #pygame.time.delay(500)
+
+    Ek_tot = sum([ball.Ek() for ball in balls ])
+    print('\rEk total =', Ek_tot, '              ', end='')
