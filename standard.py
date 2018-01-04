@@ -2,6 +2,9 @@ import numpy as np
 import pygame
 import sys
 from itertools import chain
+import colorsys
+import time
+import argparse
 
 # colors
 colors = {
@@ -120,7 +123,7 @@ class wall:
         self.ID        = ID
 
     def draw(self, surface): 
-        pygame.draw.line(surface, self.color, self.start, self.end, self.width)          
+        pygame.draw.line(surface, self.color, self.start.astype(int), self.end.astype(int), self.width)
 
 class sim_grid:
     def __init__(self, N):
@@ -137,40 +140,15 @@ class sim_grid:
     def reset(self):
         self.cells = [[[] for _ in range(self.N)]
                           for _ in range(self.N)]
-        
-
-def put_balls(balls, N, r, min_pos = 0, max_pos = 800, v_sigma = 100, color = colors['black']):
-    # Enforce no overlaps
-    i = 0
-    while i < N:
-        c = np.random.uniform(min_pos, max_pos, size=(1,nD))
-        overlap = False
-        for b in balls:
-            if distance(c, b.pos) < 2*r:
-                overlap = True
-                break
-        if overlap is False:
-            if c.flatten()[0] < dL+L/2:
-                m = 5 
-                r = 10
-                color = [255, 0, 0]
-            else:
-                m = 1
-                r = 6
-                color = [0, 255, 0]
-            balls.append(ball(pos   = c,
-                              vel   = np.random.normal(0, v_sigma, size=(1,nD)),
-                              rad   = r,
-                              mass  = m,
-                              color = color,
-                              ID    = i))
-            i += 1
-
-    # Enforce static center of mass for system
-    v_com = np.zeros(nD)
-    for b in balls:
-        v_com += b.vel
-    balls[0].vel -= v_com
+       
+    def draw(self, surface, L):
+        for i, row in enumerate(self.cells):
+            for j, cell in enumerate(row):
+                if cell == []:
+                    color = 3*[200]
+                else:
+                    color = [100, 0, 0]
+                pygame.draw.rect(surface, color, [i*L/self.N, j*L/self.N, L/self.N, L/self.N], 2)
 
 def ball_collision(b1, b2):
     dr = b2.pos - b1.pos
@@ -179,10 +157,8 @@ def ball_collision(b1, b2):
     if overlap > 0:
         b2.pos += normalize(dr) * overlap
     dv = b2.vel - b1.vel
-    #print('Before:', b1.Ek(), b2.Ek(), b1.Ek()+b2.Ek(), end='')
     b1.vel = b1.vel - 2*b2.mass / (b1.mass + b2.mass) * np.dot(-dv, -dr)/np.dot(-dr, -dr) * -dr
     b2.vel = b2.vel - 2*b1.mass / (b1.mass + b2.mass) * np.dot(+dv, +dr)/np.dot(+dr, +dr) * +dr
-    #print(', after:', b1.Ek(), b2.Ek(), b1.Ek()+b2.Ek())
     if b2 in b1.neighbors:
         b1.neighbors.remove(b2)
     if b1 in b2.neighbors:
@@ -215,63 +191,49 @@ def time_wall_collision(b, w):
     else:
         return float('inf')
 
-scr_size = 800
-
-dt = 0.01
-
-L = 600
-dL = 100
-num_grid_cells = 35
-grid = sim_grid(num_grid_cells)
-
-N_balls = 100
+parser = argparse.ArgumentParser (description="A simple 2D gas simulation")
+parser.add_argument('-i','--input_file', help='Input file', required=True)
+parser.parse_args()
+args = vars (parser.parse_args())
+read_mode = 'particles'
+with open(args['input_file']) as f:
+    lines = f.readlines()
+N_balls = int(lines[0][:-1].split()[0])
+rad = 5
 balls = []
-put_balls(balls,
-          N       = N_balls,
-          r       = 5,
-          min_pos = dL+25,
-          max_pos = L+dL,
-          v_sigma = 250,
-          color   = colors['red'])
+walls = []
+for i in range(1, N_balls+1):
+    line = lines[i][:-1].split(' ')
+    x, y, vx, vy, rad, mass = line[:6]
+    color = np.array(line[6:9]).astype(int).flatten()
+    balls.append(ball(pos   = np.array([float(x), float(y)]),
+                      vel   = np.array([float(vx), float(vy)]),
+                      rad   = int(rad),
+                      mass  = float(mass),
+                      color = color))
+N_walls = int(lines[N_balls+1][:-1].split()[0])
+for j in range(N_balls+2, N_balls+2+N_walls):
+    line = lines[j][:-1].split(' ')
+    sx, sy, ax, ay, L, w = line[:6]
+    color = np.array(line[6:9]).astype(int).flatten()
+    walls.append(wall(start     = np.array([float(sx), float(sy)]),
+                      direction = np.array([float(ax), float(ay)]),
+                      length    = float(L),
+                      width     = int(w),
+                      color     = color))
+last_line = lines[-1][:-1].split(' ')
+scr_size = int(last_line[0])
+dt = float(last_line[1])
 
-wall0 = wall(start  = np.array([dL, dL]),
-             length = L,
-             width  = 5,
-             color  = colors['blue'],
-             ID     = 0)
-
-wall1 = wall(start  = np.array([dL, dL]),
-             direction = directions['vert'],
-             length = L,
-             width  = 5,
-             color  = colors['blue'],
-             ID     = 1)
-
-wall2 = wall(start  = np.array([dL, L+dL]),
-             length = L,
-             width  = 5,
-             color  = colors['blue'],
-             ID     = 2)
-
-wall3 = wall(start  = np.array([L+dL, dL]),
-             direction = directions['vert'],
-             length = L,
-             width  = 5,
-             color  = colors['blue'],
-             ID     = 3)
-
-wall4 = wall(start     = np.array([dL+L/2, dL]),
-             direction = np.array([0, 1]),
-             length    = L,
-             width     = 5,
-             color     = colors['black'],
-             ID        = 4)
-             
-walls = [wall0, wall1, wall2, wall3, wall4]
+num_grid_cells = int(scr_size / (int(rad) * 2))
+grid = sim_grid(num_grid_cells)
 
 pygame.init()
 screen = pygame.display.set_mode ((scr_size, scr_size))
+big_ball_pos = []
 while True:
+    start_time = time.time()
+
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             pygame.quit()
@@ -280,15 +242,14 @@ while True:
             if event.key == pygame.K_q:
                 pygame.quit()
                 sys.exit()
-            if event.key == pygame.K_a:
-                walls.remove(wall4)
     
     screen.fill(colors['white'])
     # Insert balls into grid
     grid.reset()
     for ball in balls:
-        grid.insert(ball, L) 
+        grid.insert(ball, scr_size) 
     
+    #grid.draw(screen, scr_size)
     for i, ball1 in enumerate(balls):
         ball1.update_neighbors(grid)
         for ball2 in ball1.neighbors:
@@ -305,4 +266,7 @@ while True:
     #pygame.time.delay(500)
 
     Ek_tot = sum([ball.Ek() for ball in balls ])
-    print('\rEk total =', Ek_tot, '              ', end='')
+    #print('\rEk total =', Ek_tot, '              ', end='')
+
+    elapsed_time = time.time() - start_time
+    print('\r', int(1/elapsed_time), end='')
