@@ -84,6 +84,7 @@ class ball:
         if grid is not None:
             self.cell = np.array([int(np.floor(x*grid.N)) for x in self.pos])
         self.neighbors = []
+        self.MSD = 0.0
 
     def update_neighbors(self, grid):
         cells = list(chain(*[grid.cells[i][j]
@@ -94,9 +95,11 @@ class ball:
         pygame.draw.circle(surface, self.color, self.pos.astype(int), self.rad)
 
     def move(self, dt):
+        prev_pos = self.pos
         #self.vel = self.vel + np.array([0, 100]) * dt
         self.pos = self.pos + self.vel * dt
         self.cell = np.array([int(np.floor(x*grid.N))+1 for x in self.pos])
+        self.MSD += np.linalg.norm(self.pos - prev_pos)**2
 
     def bounce(self, wall):
         self.vel = self.vel - 2 * np.dot(self.vel, wall.normal) * wall.normal 
@@ -146,9 +149,11 @@ class sim_grid:
             for j, cell in enumerate(row):
                 if cell == []:
                     color = 3*[200]
+                    pygame.draw.rect(surface, color, [i*L/self.N, j*L/self.N, L/self.N, L/self.N], 2)
                 else:
-                    color = [100, 0, 0]
-                pygame.draw.rect(surface, color, [i*L/self.N, j*L/self.N, L/self.N, L/self.N], 2)
+                    for c in list_neighbor_indices(i, j, self.N):
+                        color = [100, 0, 0]
+                        pygame.draw.rect(surface, color, [c[0]*L/self.N, c[1]*L/self.N, L/self.N, L/self.N], 2)
 
 def ball_collision(b1, b2):
     dr = b2.pos - b1.pos
@@ -228,9 +233,11 @@ dt = float(last_line[1])
 num_grid_cells = int(scr_size / (int(rad) * 2))
 grid = sim_grid(num_grid_cells)
 
+MSD = np.zeros(N_balls)
+t = 0
+
 pygame.init()
 screen = pygame.display.set_mode ((scr_size, scr_size))
-big_ball_pos = []
 while True:
     start_time = time.time()
 
@@ -242,8 +249,12 @@ while True:
             if event.key == pygame.K_q:
                 pygame.quit()
                 sys.exit()
-    
+            if event.key == pygame.K_v:
+                for ball in balls:
+                    print(np.linalg.norm(ball.vel))
+
     screen.fill(colors['white'])
+    
     # Insert balls into grid
     grid.reset()
     for ball in balls:
@@ -260,13 +271,17 @@ while True:
                 ball1.bounce(wall)
         ball1.move(dt)
         ball1.draw(screen)
+        MSD[i] = ball.MSD
     for wall in walls:
         wall.draw(screen)
     pygame.display.update()
     #pygame.time.delay(500)
 
-    Ek_tot = sum([ball.Ek() for ball in balls ])
+    #Ek_tot = sum([ball.Ek() for ball in balls ])
     #print('\rEk total =', Ek_tot, '              ', end='')
-
+    
+    #print(t, np.average(MSD))
+    t += 1
+    
     elapsed_time = time.time() - start_time
-    print('\r', int(1/elapsed_time), end='')
+    #print('\rFPS:', int(1/elapsed_time), end='')
