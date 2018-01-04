@@ -94,9 +94,10 @@ class ball:
     def draw(self, surface):
         pygame.draw.circle(surface, self.color, self.pos.astype(int), self.rad)
 
-    def move(self, dt):
+    def move(self, dt, gravity=False, g=np.array([0, 1])):
         prev_pos = self.pos
-        #self.vel = self.vel + np.array([0, 100]) * dt
+        if gravity:
+            self.vel = self.vel + g * dt
         self.pos = self.pos + self.vel * dt
         self.cell = np.array([int(np.floor(x*grid.N))+1 for x in self.pos])
         self.MSD += np.linalg.norm(self.pos - prev_pos)**2
@@ -196,6 +197,10 @@ def time_wall_collision(b, w):
     else:
         return float('inf')
 
+def zero_cm_vel(balls):
+    cm_vel = np.sum(b.vel for b in balls)
+    balls[0].vel = balls[0].vel - cm_vel
+
 parser = argparse.ArgumentParser (description="A simple 2D gas simulation")
 parser.add_argument('-i','--input_file', help='Input file', required=True)
 parser.parse_args()
@@ -216,6 +221,7 @@ for i in range(1, N_balls+1):
                       rad   = int(rad),
                       mass  = float(mass),
                       color = color))
+zero_cm_vel(balls)
 N_walls = int(lines[N_balls+1][:-1].split()[0])
 for j in range(N_balls+2, N_balls+2+N_walls):
     line = lines[j][:-1].split(' ')
@@ -269,7 +275,7 @@ while True:
         for wall in walls:
             if time_wall_collision(ball1, wall) < dt:
                 ball1.bounce(wall)
-        ball1.move(dt)
+        ball1.move(dt, gravity=True, g=3*np.array([0, 1]))
         ball1.draw(screen)
         MSD[i] = ball.MSD
     for wall in walls:
